@@ -360,8 +360,9 @@ let nProd = 0, nFacet = 0;
 if (!isHub) for (const p of ALL) {
   const m = megaBySlug.get(p.mega.slug); const B = cb(p.mega.slug);
   const sub = m.bySub.get(p.subSlug).items;
-  const related = [...sub.filter((x) => x.brandSlug === p.brandSlug && x.slug !== p.slug), ...sub.filter((x) => x.brandSlug !== p.brandSlug && x.slug !== p.slug)].slice(0, 12);
-  if (related.length < 8) { const seenR = new Set(related.map((x) => x.slug).concat(p.slug)); for (const x of m.products) { if (related.length >= 12) break; if (!seenR.has(x.slug)) { related.push(x); seenR.add(x.slug); } } }
+  // related = a rotating window of the SAME subcategory (O(≤12)/product — NOT a full scan; big subcats were O(n²) before)
+  const related = [];
+  if (sub.length > 1) { const start = sub.length > 13 ? (nProd * 13) % sub.length : 0; for (let i = 0; i < sub.length && related.length < 12; i++) { const x = sub[(start + i) % sub.length]; if (x.slug !== p.slug) related.push(x); } }
   const facetLinks = `<a class="chip" href="${B}/${p.subSlug}/">${esc(p.sub)}</a>`
     + (p.brand && brandPages.has(p.brandSlug) ? `<a class="chip" href="/brand/${p.brandSlug}/">${esc(p.brand)}</a>` : '')
     + (p.brand && m.bxs.has(p.subSlug + '/' + p.brandSlug) ? `<a class="chip" href="${B}/${p.subSlug}/${p.brandSlug}/">${esc(p.brand)} ${esc(p.sub)}</a>` : '')
