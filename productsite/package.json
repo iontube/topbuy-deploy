@@ -1,0 +1,9 @@
+{
+  "name": "topbuy-productsite",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "csv-parse": "^6.1.0",
+    "slugify": "^1.6.6"
+  }
+}

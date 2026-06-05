@@ -1,0 +1,46 @@
+name: Deploy shards
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 3 * * *'   # daily 03:00 UTC — refresh feeds + redeploy changed (incremental)
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        mega:
+          - auto-moto
+          - carti-muzica-filme
+          - electronice-it
+          - casa-gradina
+          - fashion
+          - sanatate-frumusete
+          - copii-jucarii
+          - sport
+          - animale
+          - bazar
+          - pescuit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install deps
+        run: |
+          npm i -g wrangler@4
+          cd productsite && npm i --no-save csv-parse@^6.1.0 slugify@^1.6.6
+      - name: Build + deploy ${{ matrix.mega }}
+        run: node scripts/run-mega.mjs
+        env:
+          MEGA: ${{ matrix.mega }}
+          CF_ACCOUNTS: ${{ secrets.CF_ACCOUNTS }}
+          CF_ZONE: ${{ secrets.CF_ZONE }}
+          CONC: '4'
