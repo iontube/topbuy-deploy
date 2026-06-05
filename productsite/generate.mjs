@@ -170,7 +170,7 @@ function productPage(p, related, facetLinks) {
   const body = `<article class="product">
     <div class="gallery"><img src="${esc(p.img)}" alt="${esc(p.title)}" ${onerr}></div>
     <div class="buy">
-      ${p.brand ? `<a class="brand" href="/brand/${p.brandSlug}/">${esc(p.brand)}</a>` : ''}
+      ${p.brand ? (brandPages.has(p.brandSlug) ? `<a class="brand" href="/brand/${p.brandSlug}/">${esc(p.brand)}</a>` : `<span class="brand">${esc(p.brand)}</span>`) : ''}
       <h1>${esc(p.title)}</h1>
       <div class="pricebox"><span class="now">${money(p.price)}</span>${d ? `<span class="old">${money(p.oldPrice)}</span><span class="badge">-${d}%</span>` : ''}</div>
       ${d ? `<p class="save">Economisești ${money(save)}</p>` : ''}
@@ -328,6 +328,9 @@ console.log('produse valide:', ALL.length, 'in', MEGAS.length, 'categorii');
 const gByBrand = new Map();
 for (const p of ALL) if (p.brand) (gByBrand.get(p.brandSlug) || gByBrand.set(p.brandSlug, { label: p.brand, slug: p.brandSlug, items: [] }).get(p.brandSlug)).items.push(p);
 const gBrands = [...gByBrand.values()].sort((a, b) => b.items.length - a.items.length);
+// only brands with enough products get a dedicated page (noisy feeds — e.g. books — have 1000s of 1-2-product "brands" that would blow the CF 20k-file limit)
+const MIN_BRAND = +(process.env.MIN_BRAND || 10);
+const brandPages = new Set(gBrands.filter((b) => b.items.length >= MIN_BRAND).map((b) => b.slug));
 // stores (merchants): logos + affiliate target
 const LOGOS = process.env.LOGOS ? JSON.parse(readFileSync(process.env.LOGOS, 'utf8')) : {};
 const SAFF = process.env.STORESAFF ? JSON.parse(readFileSync(process.env.STORESAFF, 'utf8')) : {};
@@ -339,7 +342,7 @@ const PROMOS = process.env.PROMOS ? JSON.parse(readFileSync(process.env.PROMOS, 
 // footer internal-link graph (global, on every page)
 FOOTER_LINKS = `<div class="fcols">
   <div><div class="fcol-h">Categorii</div>${MEGAS.map((m) => `<a href="${catLink(m.slug)}">${esc(m.label)}</a>`).join('')}</div>
-  <div><div class="fcol-h">Branduri de top</div>${gBrands.slice(0, 10).map((b) => `<a href="/brand/${b.slug}/">${esc(b.label)}</a>`).join('')}</div>
+  <div><div class="fcol-h">Branduri de top</div>${gBrands.filter((b) => brandPages.has(b.slug)).slice(0, 10).map((b) => `<a href="/brand/${b.slug}/">${esc(b.label)}</a>`).join('')}</div>
   <div><div class="fcol-h">Oferte</div>${MEGAS.slice(0, 6).map((m) => `<a href="${catLink(m.slug)}">Oferte ${esc(m.label)}</a>`).join('')}</div>
 </div>`;
 
@@ -351,7 +354,7 @@ if (!isHub) for (const p of ALL) {
   const related = [...sub.filter((x) => x.brandSlug === p.brandSlug && x.slug !== p.slug), ...sub.filter((x) => x.brandSlug !== p.brandSlug && x.slug !== p.slug)].slice(0, 12);
   if (related.length < 8) { const seenR = new Set(related.map((x) => x.slug).concat(p.slug)); for (const x of m.products) { if (related.length >= 12) break; if (!seenR.has(x.slug)) { related.push(x); seenR.add(x.slug); } } }
   const facetLinks = `<a class="chip" href="${B}/${p.subSlug}/">${esc(p.sub)}</a>`
-    + (p.brand ? `<a class="chip" href="/brand/${p.brandSlug}/">${esc(p.brand)}</a>` : '')
+    + (p.brand && brandPages.has(p.brandSlug) ? `<a class="chip" href="/brand/${p.brandSlug}/">${esc(p.brand)}</a>` : '')
     + (p.brand && m.bxs.has(p.subSlug + '/' + p.brandSlug) ? `<a class="chip" href="${B}/${p.subSlug}/${p.brandSlug}/">${esc(p.brand)} ${esc(p.sub)}</a>` : '')
     + `<a class="chip" href="${B}/${p.subSlug}/cel-mai-bun/">Oferte ${esc(p.sub)}</a>`;
   W(`produs/${p.slug}/index.html`, productPage(p, related, facetLinks)); addSM(`/produs/${p.slug}/`); nProd++;
@@ -409,8 +412,8 @@ function buildMega(m) {
 }
 if (!isHub) MEGAS.forEach(buildMega);
 // brand hubs (paginated) — built on EACH shard from ITS OWN brands (self-contained; not sent to hub)
-if (!isHub) for (const b of gBrands) writeListing({ dir: `brand/${b.slug}`, baseSlug: `/brand/${b.slug}/`, h1: b.label, intro: `${b.label}: ${b.items.length} produse, prețuri actualizate ${today}.`,
-  items: b.items, crumbItems: isShard ? [{ name: 'Acasă', url: '/' }, { name: b.label, url: `/brand/${b.slug}/` }] : [{ name: 'Acasă', url: '/' }, { name: 'Branduri', url: '/branduri/' }, { name: b.label, url: `/brand/${b.slug}/` }] });
+if (!isHub) for (const b of gBrands) { if (b.items.length < MIN_BRAND) continue; writeListing({ dir: `brand/${b.slug}`, baseSlug: `/brand/${b.slug}/`, h1: b.label, intro: `${b.label}: ${b.items.length} produse, prețuri actualizate ${today}.`,
+  items: b.items, crumbItems: isShard ? [{ name: 'Acasă', url: '/' }, { name: b.label, url: `/brand/${b.slug}/` }] : [{ name: 'Acasă', url: '/' }, { name: 'Branduri', url: '/branduri/' }, { name: b.label, url: `/brand/${b.slug}/` }] }); }
 // store pages (per merchant) — hub/full only
 if (!isShard) for (const st of storeList) {
   const head = `<div class="storehead">${st.logo ? `<div class="sh-logo${st.inv ? ' inv' : ''}"><img src="${esc(st.logo)}" alt="${esc(st.label)}" ${onerr}></div>` : ''}<div class="sh-info"><h1>${esc(st.label)}</h1><p class="sh-meta">${st.items.length} produse din magazinul partener ${esc(st.label)}</p>${st.aff ? `<a class="cta sh-cta" href="/out/${st.slug}/_home/" target="_blank" rel="sponsored nofollow noopener">Vizitează ${esc(st.label)} →</a>` : ''}</div></div>`;
