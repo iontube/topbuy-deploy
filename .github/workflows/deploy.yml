@@ -1,7 +1,12 @@
 name: Deploy shards
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      megas:
+        description: 'Comma-separated megas to (re)deploy; empty = all'
+        required: false
+        default: ''
   schedule:
     - cron: '0 3 * * *'   # daily 03:00 UTC — refresh feeds + redeploy changed (incremental)
 
@@ -9,25 +14,30 @@ permissions:
   contents: read
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      megas: ${{ steps.set.outputs.megas }}
+    steps:
+      - id: set
+        run: |
+          ALL='["auto-moto","carti-muzica-filme","electronice-it","casa-gradina","fashion","sanatate-frumusete","copii-jucarii","sport","animale","bazar","pescuit"]'
+          IN="${{ github.event.inputs.megas }}"
+          if [ -n "$IN" ]; then
+            echo "megas=$(echo "$IN" | tr ',' '\n' | sed 's/ //g' | grep . | jq -R . | jq -s -c .)" >> "$GITHUB_OUTPUT"
+          else
+            echo "megas=$ALL" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
+    needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        mega:
-          - auto-moto
-          - carti-muzica-filme
-          - electronice-it
-          - casa-gradina
-          - fashion
-          - sanatate-frumusete
-          - copii-jucarii
-          - sport
-          - animale
-          - bazar
-          - pescuit
+        mega: ${{ fromJson(needs.setup.outputs.megas) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
