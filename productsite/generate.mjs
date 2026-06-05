@@ -233,11 +233,13 @@ writeFileSync(join(DIST, 'style.css'), CSS);
 // ---- roles: full (one project / demo) | hub (main domain) | shard (one mega on a subdomain) ----
 const isShard = ROLE === 'shard';
 const isHub = ROLE === 'hub';
+const isMegaTree = !!process.env.MEGATREE;   // server: build ONLY products + /categorie/<mega>/ (one mega/process, no globals)
+const SERVER = !!process.env.SERVER_GLOBAL;  // server global pass: home/branduri/magazine/legal from aggregate, /categorie/ URLs
 const SUBDOM = { 'electronice-it': 'electronice', 'casa-gradina': 'casa', 'fashion': 'fashion', 'sanatate-frumusete': 'sanatate', 'copii-jucarii': 'copii', 'auto-moto': 'auto', 'sport': 'sport', 'carti-muzica-filme': 'carti', 'animale': 'animale', 'pescuit': 'pescuit' };
 const subdom = (megaSlug) => SUBDOM[megaSlug] || megaSlug;     // short subdomain name per mega
 const shardURL = (slug) => `https://${subdom(slug)}.topbuy.ro`; // subdomain origin for a mega (part 1)
 const cb = (megaSlug) => isShard ? '' : '/categorie/' + megaSlug; // category URL base (shard drops the prefix)
-const catLink = (megaSlug) => (isHub || isShard) ? shardURL(megaSlug) + '/' : '/categorie/' + megaSlug + '/'; // sharded deploy → subdomains; full/demo → relative
+const catLink = (megaSlug) => SERVER ? '/categorie/' + megaSlug + '/' : ((isHub || isShard) ? shardURL(megaSlug) + '/' : '/categorie/' + megaSlug + '/'); // server: subdirectories
 const SHARD_MAX = +(process.env.SHARD_MAX || 13000);  // max products/shard; ~1.25× files (pagination+facets+brand×subcat) → ~16-17k, safe margin under CF 20k
 let SHARD_PART = +(process.env.SHARD_PART || 1);      // which part of a split mega this build serves (overridden by part-JSON)
 const partURL = (mega, part) => `https://${subdom(mega)}${part > 1 ? part : ''}.topbuy.ro/`; // sanatate, sanatate2, sanatate3…
@@ -419,15 +421,15 @@ function buildMega(m) {
 }
 if (!isHub) MEGAS.forEach(buildMega);
 // brand hubs (paginated) — built on EACH shard from ITS OWN brands (self-contained; not sent to hub)
-if (!isHub) for (const b of gBrands) { if (b.items.length < MIN_BRAND) continue; writeListing({ dir: `brand/${b.slug}`, baseSlug: `/brand/${b.slug}/`, h1: b.label, intro: `${b.label}: ${b.items.length} produse, prețuri actualizate ${today}.`,
+if (!isHub && !isMegaTree) for (const b of gBrands) { if (b.items.length < MIN_BRAND) continue; writeListing({ dir: `brand/${b.slug}`, baseSlug: `/brand/${b.slug}/`, h1: b.label, intro: `${b.label}: ${b.items.length} produse, prețuri actualizate ${today}.`,
   items: b.items, crumbItems: isShard ? [{ name: 'Acasă', url: '/' }, { name: b.label, url: `/brand/${b.slug}/` }] : [{ name: 'Acasă', url: '/' }, { name: 'Branduri', url: '/branduri/' }, { name: b.label, url: `/brand/${b.slug}/` }] }); }
 // store pages (per merchant) — hub/full only
-if (!isShard) for (const st of storeList) {
+if (!isShard && !isMegaTree) for (const st of storeList) {
   const head = `<div class="storehead">${st.logo ? `<div class="sh-logo${st.inv ? ' inv' : ''}"><img src="${esc(st.logo)}" alt="${esc(st.label)}" ${onerr}></div>` : ''}<div class="sh-info"><h1>${esc(st.label)}</h1><p class="sh-meta">${st.items.length} produse din magazinul partener ${esc(st.label)}</p>${st.aff ? `<a class="cta sh-cta" href="/out/${st.slug}/_home/" target="_blank" rel="sponsored nofollow noopener">Vizitează ${esc(st.label)} →</a>` : ''}</div></div>`;
   writeListing({ dir: `magazin/${st.slug}`, baseSlug: `/magazin/${st.slug}/`, h1: st.label, headerHtml: head, items: st.items,
     crumbItems: [{ name: 'Acasă', url: '/' }, { name: 'Magazine', url: '/magazine/' }, { name: st.label, url: `/magazin/${st.slug}/` }] });
 }
-if (!isShard) { // ===== HUB-ONLY pages (home, categorii, branduri, magazine, promotii, legal) =====
+if (!isShard && !isMegaTree) { // ===== HUB-ONLY pages (home, categorii, branduri, magazine, promotii, legal) =====
 // index hubs (rich: cards/chips + product grid, not thin)
 const hubFeatured = interleaveShuffled(18);
 function hubPage(h1, slug, crumbLabel, inner) {
@@ -582,7 +584,7 @@ for (const f of ['logo.png', 'favicon-16.png', 'favicon-32.png', 'favicon-48.png
 }
 W('site.webmanifest', JSON.stringify({ name: SITE_NAME, short_name: 'TopBuy', start_url: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#f7941d', icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }] }));
 // search: client-side index + page (hub only)
-if (!isShard && !isHub) {
+if (!isShard && !isHub && !isMegaTree) {
 W('search-index.json', JSON.stringify(ALL.map((p) => ({ t: p.title, u: `/produs/${p.slug}/`, p: p.price, o: p.oldPrice, i: p.img, b: p.brand }))));
 W('cautare/index.html', layout({ title: 'Caută produse | TopBuy.ro', desc: 'Caută printre mii de produse și oferte din magazinele partenere.', canonical: `${SITE}/cautare/`, body: `
   <h1 id="rh">Caută produse</h1>
@@ -600,12 +602,22 @@ W('cautare/index.html', layout({ title: 'Caută produse | TopBuy.ro', desc: 'Cau
   </script>`, jsonld: [] }));
 addSM('/cautare/');
 }
-// /out function
-const fnDir = join(DIST, '..', 'functions', 'out', '[merchant]'); mkdirSync(fnDir, { recursive: true });
 const STORES = {}; storeList.forEach((s) => { if (s.aff) STORES[s.slug] = { u: s.aff.u, c: s.aff.code }; });
 const PROMOMAP = {}; PROMOS.forEach((p) => { if (p.landing && p.code) PROMOMAP[p.id] = { u: p.landing, c: p.code, e: p.end || '' }; });
-// server (full mode): write maps for the Node /out + /img service (nginx proxies /out,/img → it)
-if (!isShard && !isHub) { mkdirSync(join(DIST, '_data'), { recursive: true }); writeFileSync(join(DIST, '_data', 'campaign.json'), JSON.stringify(CAMPAIGN)); writeFileSync(join(DIST, '_data', 'stores.json'), JSON.stringify(STORES)); writeFileSync(join(DIST, '_data', 'promos.json'), JSON.stringify(PROMOMAP)); }
+// ---- server /_data maps for the Node /out + /img service ----
+if (isMegaTree) {
+  const mg = MEGAS[0]; mkdirSync(join(DIST, '_data'), { recursive: true });
+  writeFileSync(join(DIST, '_data', `campaign-${mg.slug}.json`), JSON.stringify(CAMPAIGN));
+  // meta for the global pass: count + sample (≤8/merchant, no `sub` → relative /produs/ links on the single-domain server)
+  const seen = {}, sample = [];
+  for (const p of mg.products) { const k = p.merchantSlug; if ((seen[k] = (seen[k] || 0)) >= 8) continue; seen[k]++; sample.push({ slug: p.slug, title: p.title, price: p.price, oldPrice: p.oldPrice, img: p.img, brand: p.brand, brandSlug: p.brandSlug, merchant: p.merchant, merchantSlug: p.merchantSlug }); }
+  writeFileSync(join(DIST, '_data', `meta-${mg.slug}.json`), JSON.stringify({ slug: mg.slug, label: mg.label, count: mg.products.length, sample }));
+}
+else if (SERVER) { mkdirSync(join(DIST, '_data'), { recursive: true }); const allStores = {}; for (const [slug, a] of Object.entries(SAFF)) if (a && a.code) allStores[slug] = { u: a.u, c: a.code }; writeFileSync(join(DIST, '_data', 'stores.json'), JSON.stringify(allStores)); writeFileSync(join(DIST, '_data', 'promos.json'), JSON.stringify(PROMOMAP)); }
+else if (!isShard && !isHub) { mkdirSync(join(DIST, '_data'), { recursive: true }); writeFileSync(join(DIST, '_data', 'campaign.json'), JSON.stringify(CAMPAIGN)); writeFileSync(join(DIST, '_data', 'stores.json'), JSON.stringify(STORES)); writeFileSync(join(DIST, '_data', 'promos.json'), JSON.stringify(PROMOMAP)); }
+// ---- CF /out + /img Functions (only for CF deploys, NOT server modes) ----
+if (!isMegaTree && !SERVER) {
+const fnDir = join(DIST, '..', 'functions', 'out', '[merchant]'); mkdirSync(fnDir, { recursive: true });
 writeFileSync(join(fnDir, '[id].js'), `const SITE=${JSON.stringify(SITE)};const AFF_CODE=${JSON.stringify(AFF_CODE)};const CAMPAIGN=${JSON.stringify(CAMPAIGN)};const STORES=${JSON.stringify(STORES)};const PROMOS=${JSON.stringify(PROMOMAP)};
 export function onRequest({params}){const m=params.merchant,id=params.id;
 if(m==='_promo'){const p=PROMOS[id];if(!p||(p.e&&Date.parse(p.e)<Date.now()))return Response.redirect(SITE+'/promotii/',302);return Response.redirect('https://event.2performant.com/events/click?ad_type=quicklink&aff_code='+AFF_CODE+'&unique='+p.c+'&redirect_to='+encodeURIComponent(p.u),302);}
@@ -622,13 +634,19 @@ let r;try{r=await fetch(d,{headers:{'Referer':o+'/','User-Agent':'Mozilla/5.0 (W
 if(!r.ok)return new Response('',{status:502});
 const resp=new Response(r.body,{headers:{'content-type':r.headers.get('content-type')||'image/jpeg','cache-control':'public, max-age=604800','access-control-allow-origin':'*'}});
 context.waitUntil(c.put(k,resp.clone()));return resp;}\n`);
+} // end CF Functions
 // sitemap: shard/small-full = urlset; hub (or >45k) = sitemap-index (own chunks + shard sitemaps)
 const allUrls = [...new Set(SITEMAP)];
 const urlset = (arr) => `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${arr.map((u) => `<url><loc>${u}</loc></url>`).join('')}</urlset>`;
 const idx = (locs) => `<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${locs.map((l) => `<sitemap><loc>${l}</loc></sitemap>`).join('')}</sitemapindex>`;
 const CHUNK = 45000;
 const SHARDS = (process.env.SHARDS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean); // hub: subdomain origins
-if (allUrls.length <= CHUNK && !(isHub && SHARDS.length)) {
+if (isMegaTree) {
+  const mslug = MEGAS[0].slug; const parts = []; for (let i = 0; i < allUrls.length; i += CHUNK) parts.push(allUrls.slice(i, i + CHUNK));
+  parts.forEach((p, i) => W(`sitemap-${mslug}-${i + 1}.xml`, urlset(p)));
+} else if (SERVER) {
+  /* sitemap.xml index is built on the server (globs sitemap-*.xml) after all megas land */
+} else if (allUrls.length <= CHUNK && !(isHub && SHARDS.length)) {
   W('sitemap.xml', urlset(allUrls));
 } else {
   const parts = []; for (let i = 0; i < allUrls.length; i += CHUNK) parts.push(allUrls.slice(i, i + CHUNK));

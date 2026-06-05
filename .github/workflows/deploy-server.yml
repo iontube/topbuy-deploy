@@ -12,47 +12,72 @@ jobs:
   build-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    env:
+      SITE: https://topbuy.ro
+      MINB: '99999999'   # no global /brand/ pages on server (brand×subcat stays); avoids 404s
     steps:
       - uses: actions/checkout@v4
-
       - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
-          df -h / | tail -1
-
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-
       - name: Install deps
         run: cd productsite && npm i --no-save csv-parse@^6.1.0 slugify@^1.6.6
-
       - name: Fetch + concat all feeds
         run: node scripts/fetch-all.mjs
         env: { MEGAFEEDS: /tmp/megafeeds }
-
-      - name: Generate full tree
-        run: |
-          cd productsite
-          MANIFEST=/tmp/megafeeds/manifest.tsv \
-          LOGOS=$GITHUB_WORKSPACE/data/logos.json STORESAFF=$GITHUB_WORKSPACE/data/stores-aff.json \
-          PROMOS=$GITHUB_WORKSPACE/data/promos.json PROTECTED=$GITHUB_WORKSPACE/data/protected.json \
-          OUT_DIR=/tmp/www/dist node --max-old-space-size=14000 generate.mjs
-          rm -rf /tmp/megafeeds
-          echo "files: $(find /tmp/www/dist -type f | wc -l) | size: $(du -sh /tmp/www/dist | cut -f1)"
-
-      - name: Deploy to server (stream tar over SSH, atomic swap)
+      - name: SSH setup
         run: |
           mkdir -p ~/.ssh && echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
-          H="${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}"
+          echo "SSHH=${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" >> $GITHUB_ENV
+      - name: Reset server tree
+        run: ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=no $SSHH 'sudo rm -rf /var/www/topbuy/* && sudo mkdir -p /var/www/topbuy/_data'
+      - name: Per-mega generate + transfer
+        run: |
           SSH="ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=no"
-          tar czf - -C /tmp/www/dist . | $SSH $H '
-            set -e
-            sudo rm -rf /var/www/topbuy_new && sudo mkdir -p /var/www/topbuy_new
-            sudo tar xzf - -C /var/www/topbuy_new
-            sudo rm -rf /var/www/topbuy_old
-            sudo mv /var/www/topbuy /var/www/topbuy_old 2>/dev/null || true
-            sudo mv /var/www/topbuy_new /var/www/topbuy
+          mkdir -p /tmp/alldata
+          while IFS='|' read -r slug label; do
+            [ -z "$slug" ] && continue
+            echo "::group::$slug"
+            rm -rf /tmp/m
+            MEGATREE=1 MIN_BRAND=$MINB SITE_URL=$SITE HUB_URL=$SITE \
+              FEED=/tmp/megafeeds/$slug.csv MEGA_SLUG="$slug" MEGA_LABEL="$label" \
+              LOGOS=$GITHUB_WORKSPACE/data/logos.json STORESAFF=$GITHUB_WORKSPACE/data/stores-aff.json PROMOS=$GITHUB_WORKSPACE/data/promos.json PROTECTED=$GITHUB_WORKSPACE/data/protected.json \
+              OUT_DIR=/tmp/m/dist node --max-old-space-size=14000 productsite/generate.mjs
+            cp /tmp/m/dist/_data/* /tmp/alldata/ 2>/dev/null || true
+            echo "  $slug: $(find /tmp/m/dist -type f | wc -l) files, transferring…"
+            tar czf - -C /tmp/m/dist . | $SSH $SSHH 'sudo tar xzf - -C /var/www/topbuy'
+            rm -rf /tmp/m
+            echo "::endgroup::"
+          done < <(node -e 'const m=require("./data/megas.json");for(const[k,v]of Object.entries(m))console.log(k+"|"+v)')
+      - name: Global pass (home/categorii/magazine/legal + _data)
+        run: |
+          node -e '
+            const fs=require("fs");
+            const meta={}; const camp={};
+            for(const f of fs.readdirSync("/tmp/alldata")){
+              if(f.startsWith("meta-")){const j=JSON.parse(fs.readFileSync("/tmp/alldata/"+f));meta[j.slug]={label:j.label,count:j.count,sub:"",sample:j.sample};}
+              if(f.startsWith("campaign-"))Object.assign(camp,JSON.parse(fs.readFileSync("/tmp/alldata/"+f)));
+            }
+            fs.writeFileSync("/tmp/hubmeta.json",JSON.stringify(meta));
+            fs.writeFileSync("/tmp/campaign.json",JSON.stringify(camp));
+            console.log("hubmeta:",Object.keys(meta).length,"megas | campaign merchants:",Object.keys(camp).length);
+          '
+          rm -rf /tmp/g
+          SERVER_GLOBAL=1 ROLE=hub MIN_BRAND=$MINB SITE_URL=$SITE HUB_URL=$SITE HUBMETA=/tmp/hubmeta.json \
+            LOGOS=$GITHUB_WORKSPACE/data/logos.json STORESAFF=$GITHUB_WORKSPACE/data/stores-aff.json PROMOS=$GITHUB_WORKSPACE/data/promos.json \
+            OUT_DIR=/tmp/g/dist node productsite/generate.mjs
+          cp /tmp/campaign.json /tmp/g/dist/_data/campaign.json
+          SSH="ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=no"
+          tar czf - -C /tmp/g/dist . | $SSH $SSHH 'sudo tar xzf - -C /var/www/topbuy'
+      - name: Sitemap index + finalize
+        run: |
+          ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=no $SSHH '
+            cd /var/www/topbuy
+            { echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?><sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">";
+              for f in sitemap-*.xml; do [ -e "$f" ] && echo "<sitemap><loc>https://topbuy.ro/$f</loc></sitemap>"; done;
+              echo "</sitemapindex>"; } | sudo tee sitemap.xml >/dev/null
             sudo chown -R www-data:www-data /var/www/topbuy
             sudo systemctl restart tbsvc
-            echo "deployed: $(find /var/www/topbuy -type f | wc -l) files"
+            echo "TOTAL files: $(find /var/www/topbuy -type f | wc -l)"
           '
