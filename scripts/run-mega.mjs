@@ -134,8 +134,11 @@ async function processOne(sub, idx, total) {
 await downloadConcat();
 split();
 rmSync(megaCsv, { force: true }); // free disk
-const subs = readdirSync(partsDir).filter((f) => f.endsWith('.json')).map((f) => f.replace('.json', '')).sort();
-console.log(`=== deploying ${subs.length} shards (conc ${CONC}) ===`);
+const targets = JSON.parse(readFileSync(join(DATA, 'targets.json'), 'utf8'));
+const LIMIT_PARTS = targets[MEGA] || 99999;   // balanced launch: only first N parts per mega (free zone DNS cap)
+const partOf = (sub) => +((sub.match(/(\d+)$/) || [, '1'])[1]);
+const subs = readdirSync(partsDir).filter((f) => f.endsWith('.json')).map((f) => f.replace('.json', '')).filter((s) => partOf(s) <= LIMIT_PARTS).sort();
+console.log(`=== deploying ${subs.length} shards (cap ${LIMIT_PARTS}, conc ${CONC}) ===`);
 let i = 0, ok = 0, fail = 0, idx = 0;
 async function worker() { while (i < subs.length) { const sub = subs[i++]; (await processOne(sub, ++idx, subs.length)) ? ok++ : fail++; } }
 await Promise.all(Array.from({ length: CONC }, worker));
