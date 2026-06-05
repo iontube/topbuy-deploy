@@ -35,16 +35,24 @@ const partsDir = join(WORK, 'parts'); mkdirSync(partsDir, { recursive: true });
 // 1) download + concat feeds (keep one header)
 async function downloadConcat() {
   const ws = createWriteStream(megaCsv);
-  let first = true, ok = 0;
+  let first = true, ok = 0, lost = 0;
   for (const url of feeds) {
-    let buf;
-    try { const r = await fetch(url, { signal: AbortSignal.timeout(240000) }); if (!r.ok) { console.log('  skip', r.status, url); continue; } buf = Buffer.from(await r.arrayBuffer()); }
-    catch (e) { console.log('  err', e.message, url); continue; }
-    if (buf.length < 50) continue;
+    let buf = null;
+    for (let attempt = 1; attempt <= 4 && !buf; attempt++) {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(120000 * attempt) });
+        if (!r.ok) { if (r.status === 404) break; throw new Error('http ' + r.status); }
+        const b = Buffer.from(await r.arrayBuffer());
+        if (b.length < 50) break; // empty feed
+        buf = b;
+      } catch (e) { console.log(`  retry ${attempt} (${e.message}) ${url}`); await new Promise((r) => setTimeout(r, 3000 * attempt)); }
+    }
+    if (!buf) { lost++; continue; }
     if (first) { ws.write(buf); first = false; }
     else { const nl = buf.indexOf(0x0a); ws.write(nl >= 0 ? buf.subarray(nl + 1) : buf); }
     ok++;
   }
+  if (lost) console.log(`  WARN: ${lost} feeds lost after retries`);
   await new Promise((res) => ws.end(res));
   console.log(`  downloaded ${ok}/${feeds.length} feeds → ${(statSync(megaCsv).size / 1048576).toFixed(0)}MB`);
 }
