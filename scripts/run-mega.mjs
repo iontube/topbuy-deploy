@@ -38,15 +38,16 @@ async function downloadConcat() {
   let first = true, ok = 0, lost = 0;
   for (const url of feeds) {
     let buf = null;
-    for (let attempt = 1; attempt <= 4 && !buf; attempt++) {
+    for (let attempt = 1; attempt <= 6 && !buf; attempt++) {
       try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(120000 * attempt) });
+        const r = await fetch(url, { signal: AbortSignal.timeout(150000 * attempt), headers: { 'User-Agent': 'topbuy-feed/1.0' } });
         if (!r.ok) { if (r.status === 404) break; throw new Error('http ' + r.status); }
         const b = Buffer.from(await r.arrayBuffer());
         if (b.length < 50) break; // empty feed
         buf = b;
-      } catch (e) { console.log(`  retry ${attempt} (${e.message}) ${url}`); await new Promise((r) => setTimeout(r, 3000 * attempt)); }
+      } catch (e) { if (attempt < 6) console.log(`  retry ${attempt} ${url.split('/').pop()} (${e.message})`); await new Promise((r) => setTimeout(r, 4000 * attempt)); }
     }
+    await new Promise((r) => setTimeout(r, 400)); // gentle pacing between feeds (avoid 2P throttling)
     if (!buf) { lost++; continue; }
     if (first) { ws.write(buf); first = false; }
     else { const nl = buf.indexOf(0x0a); ws.write(nl >= 0 ? buf.subarray(nl + 1) : buf); }
@@ -119,26 +120,26 @@ function deploy(acc, name, dir) {
 async function processOne(sub, idx, total) {
   const acc = ACCOUNTS[shardAcct[sub] ?? 0];
   const name = `topbuy-${sub}`;
-  try {
-    const dir = buildShard(sub);
-    if (!(await ensureProject(acc, name))) throw new Error('project');
-    if (!deploy(acc, name, dir)) throw new Error('deploy');
-    if (!(await attachDomain(acc, name, `${sub}.topbuy.ro`))) throw new Error('domain');
-    if (!(await ensureCNAME(sub, `${name}.pages.dev`))) throw new Error('cname');
-    rmSync(dir, { recursive: true, force: true });
-    console.log(`[${idx}/${total}] OK ${sub} → ${acc.email.split('@')[1]}`);
-    return true;
-  } catch (e) { console.log(`[${idx}/${total}] FAIL ${sub}: ${e.message}`); return false; }
+  // NO custom domain / CNAME — wildcard *.topbuy.ro + the routing Worker handle DNS (project pages.dev = topbuy-<sub>.pages.dev)
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const dir = buildShard(sub);
+      if (!(await ensureProject(acc, name))) throw new Error('project');
+      let deployed = false;
+      for (let t = 0; t < 3 && !deployed; t++) { deployed = deploy(acc, name, dir); if (!deployed) await new Promise((r) => setTimeout(r, 4000)); }
+      if (!deployed) throw new Error('deploy');
+      rmSync(dir, { recursive: true, force: true });
+      console.log(`[${idx}/${total}] OK ${sub} → ${acc.email.split('@')[1]}`);
+      return true;
+    } catch (e) { if (attempt === 2) { console.log(`[${idx}/${total}] FAIL ${sub}: ${e.message}`); return false; } await new Promise((r) => setTimeout(r, 5000)); }
+  }
 }
 
 await downloadConcat();
 split();
 rmSync(megaCsv, { force: true }); // free disk
-const targets = JSON.parse(readFileSync(join(DATA, 'targets.json'), 'utf8'));
-const LIMIT_PARTS = targets[MEGA] || 99999;   // balanced launch: only first N parts per mega (free zone DNS cap)
-const partOf = (sub) => +((sub.match(/(\d+)$/) || [, '1'])[1]);
-const subs = readdirSync(partsDir).filter((f) => f.endsWith('.json')).map((f) => f.replace('.json', '')).filter((s) => partOf(s) <= LIMIT_PARTS).sort();
-console.log(`=== deploying ${subs.length} shards (cap ${LIMIT_PARTS}, conc ${CONC}) ===`);
+const subs = readdirSync(partsDir).filter((f) => f.endsWith('.json')).map((f) => f.replace('.json', '')).sort();
+console.log(`=== deploying ALL ${subs.length} shards (conc ${CONC}) ===`);
 let i = 0, ok = 0, fail = 0, idx = 0;
 async function worker() { while (i < subs.length) { const sub = subs[i++]; (await processOne(sub, ++idx, subs.length)) ? ok++ : fail++; } }
 await Promise.all(Array.from({ length: CONC }, worker));
