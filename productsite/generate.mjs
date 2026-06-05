@@ -144,14 +144,14 @@ function bc(items) { // breadcrumb: [{name,url}]; last = current
 }
 function card(p) {
   const d = discount(p);
-  return `<a class="card" href="/produs/${p.slug}/">
+  return `<a class="card" href="${p.sub ? `https://${p.sub}.topbuy.ro/produs/${p.slug}/` : `/produs/${p.slug}/`}">
     <div class="thumb"><img src="${esc(p.img)}" alt="${esc(p.title)}" loading="lazy" ${onerr}></div>
     <div class="ci">${p.brand ? `<span class="brand">${esc(p.brand)}</span>` : ''}<span class="ci-t">${esc(p.title)}</span>
     <div class="price">${money(p.price)}${d ? `<span class="old">${money(p.oldPrice)}</span><span class="badge">-${d}%</span>` : ''}</div></div></a>`;
 }
 const grid = (items) => `<div class="grid">${items.map(card).join('')}</div>`;
 const sechead = (t, href) => `<div class="sechead"><h2>${esc(t)}</h2>${href ? `<a class="seeall" href="${href}">Vezi toate →</a>` : ''}</div>`;
-const catCard = (m) => `<a class="catcard" href="${catLink(m.slug)}"><div class="ct"><img src="${esc(m.products[0] ? m.products[0].img : '')}" alt="${esc(m.label)}" loading="lazy" ${onerr}></div><div class="cc-b"><span class="cc-n">${esc(m.label)}</span><span class="cc-c">${m.products.length} produse</span></div></a>`;
+const catCard = (m) => `<a class="catcard" href="${catLink(m.slug)}"><div class="ct"><img src="${esc(m.products[0] ? m.products[0].img : '')}" alt="${esc(m.label)}" loading="lazy" ${onerr}></div><div class="cc-b"><span class="cc-n">${esc(m.label)}</span><span class="cc-c">${(m._count != null ? m._count : m.products.length).toLocaleString('ro-RO')} produse</span></div></a>`;
 // seeded shuffle (seed = build time) -> homepage shows different products after each feed update
 let _seed = (ASSET_V % 2147483646) + 1;
 const rnd = () => (_seed = (_seed * 16807) % 2147483647) / 2147483647;
@@ -257,7 +257,14 @@ function assignParts(products) {
 }
 // ---- load feeds: MANIFEST (mega|label|file per line) = global multi-category, else single shard ----
 const MEGAS = [];
-if (process.env.PARTS_JSON) { // build one shard from a pre-split part-JSON (no CSV parse, no re-split)
+if (process.env.HUBMETA) { // build the HUB from aggregated per-mega metadata (sample products + real counts); no full-catalog load
+  const meta = JSON.parse(readFileSync(process.env.HUBMETA, 'utf8'));
+  for (const [slug, m] of Object.entries(meta)) {
+    const mega = { slug, label: m.label };
+    (m.sample || []).forEach((p) => { p.mega = mega; });
+    MEGAS.push({ slug, label: m.label, products: m.sample || [], _count: m.count });
+  }
+} else if (process.env.PARTS_JSON) { // build one shard from a pre-split part-JSON (no CSV parse, no re-split)
   const j = JSON.parse(readFileSync(process.env.PARTS_JSON, 'utf8'));
   const mega = { slug: j.mega.slug, label: j.mega.label };
   j.products.forEach((p) => { p.mega = mega; });
@@ -342,7 +349,7 @@ const PROMOS = process.env.PROMOS ? JSON.parse(readFileSync(process.env.PROMOS, 
 // footer internal-link graph (global, on every page)
 FOOTER_LINKS = `<div class="fcols">
   <div><div class="fcol-h">Categorii</div>${MEGAS.map((m) => `<a href="${catLink(m.slug)}">${esc(m.label)}</a>`).join('')}</div>
-  <div><div class="fcol-h">Branduri de top</div>${gBrands.filter((b) => brandPages.has(b.slug)).slice(0, 10).map((b) => `<a href="/brand/${b.slug}/">${esc(b.label)}</a>`).join('')}</div>
+  ${isHub ? '' : `<div><div class="fcol-h">Branduri de top</div>${gBrands.filter((b) => brandPages.has(b.slug)).slice(0, 10).map((b) => `<a href="/brand/${b.slug}/">${esc(b.label)}</a>`).join('')}</div>`}
   <div><div class="fcol-h">Oferte</div>${MEGAS.slice(0, 6).map((m) => `<a href="${catLink(m.slug)}">Oferte ${esc(m.label)}</a>`).join('')}</div>
 </div>`;
 
@@ -436,10 +443,10 @@ addSM('/categorii/');
 // /branduri: branduri populare (cu produs reprezentativ) + toate brandurile + produse de top
 const topBrandProducts = gBrands.slice(0, 18).map((b) => b.items[0]).filter(Boolean);
 const BRANDS_SHOWN = 300; // TODO: paginare /branduri când catalogul e complet (mii de branduri)
-W('branduri/index.html', hubPage('Toate brandurile', '/branduri/', 'Branduri',
+if (!isHub) W('branduri/index.html', hubPage('Toate brandurile', '/branduri/', 'Branduri',
   `<section>${sechead('Produse de la branduri de top')}${grid(topBrandProducts)}</section>
    <section>${sechead('Toate brandurile')}<div class="chips">${gBrands.slice(0, BRANDS_SHOWN).map((b) => `<a class="chip" href="/brand/${b.slug}/">${esc(b.label)} <em>${b.items.length}</em></a>`).join('')}</div>${gBrands.length > BRANDS_SHOWN ? `<p class="intro" style="margin-top:14px">+${gBrands.length - BRANDS_SHOWN} branduri</p>` : ''}</section>`));
-addSM('/branduri/');
+if (!isHub) addSM('/branduri/');
 // /magazine: toate magazinele partenere (logo-uri -> pagina magazinului)
 W('magazine/index.html', hubPage('Magazine partenere', '/magazine/', 'Magazine',
   `<div class="stores" style="margin-top:18px">${storeList.map((s) => `<a class="storelogo${s.inv ? ' inv' : ''}" href="/magazin/${s.slug}/" title="${esc(s.label)}">${s.logo ? `<img src="${esc(s.logo)}" alt="${esc(s.label)}" loading="lazy" ${onerr}>` : `<span class="sl-name">${esc(s.label)}</span>`}</a>`).join('')}</div>`));
@@ -451,18 +458,18 @@ addSM('/promotii/');
 // home (mixed across all categories — interleave one per category per round)
 const featured = interleaveShuffled(30);
 const homeSchema = [{ '@context': 'https://schema.org', '@type': 'Organization', name: SITE_NAME, url: SITE + '/' },
-  { '@context': 'https://schema.org', '@type': 'WebSite', name: SITE_NAME, url: SITE + '/', potentialAction: { '@type': 'SearchAction', target: `${SITE}/cautare/?q={q}`, 'query-input': 'required name=q' } },
+  { '@context': 'https://schema.org', '@type': 'WebSite', name: SITE_NAME, url: SITE + '/', ...(isHub ? {} : { potentialAction: { '@type': 'SearchAction', target: `${SITE}/cautare/?q={q}`, 'query-input': 'required name=q' } }) },
   itemListSchema(featured, 'Produse recomandate')];
 const topDeals = shuffled(ALL.filter((p) => discount(p) >= 15).sort((a, b) => discount(b) - discount(a)).slice(0, 60)).slice(0, 10);
 const homeBody = `<section class="hero"><h1>Descoperă mii de produse și oferte</h1><p class="sub">din magazinele tale preferate, într-un singur loc.</p>
-  <form class="herosearch" onsubmit="return tbSearch(this)"><input placeholder="Caută produse…" aria-label="Caută produse"><button type="submit">Caută</button></form>
-  <div class="herobtns"><a class="hb-primary" href="/categorii/">Categorii</a><a class="hb" href="/branduri/">Branduri</a>${PROMOS.length ? `<a class="hb-promo" href="/promotii/">Promoții</a>` : ''}</div></section>
-  <div class="statband"><div><b>${ALL.length.toLocaleString('ro-RO')}</b><span>produse</span></div><div><b>${storeList.length}</b><span>magazine partenere</span></div><div><b>${MEGAS.length}</b><span>categorii</span></div><div><b>Zilnic</b><span>prețuri actualizate</span></div></div>
+  ${isHub ? '' : `<form class="herosearch" onsubmit="return tbSearch(this)"><input placeholder="Caută produse…" aria-label="Caută produse"><button type="submit">Caută</button></form>`}
+  <div class="herobtns"><a class="hb-primary" href="/categorii/">Categorii</a><a class="hb" href="/magazine/">Magazine</a>${PROMOS.length ? `<a class="hb-promo" href="/promotii/">Promoții</a>` : ''}</div></section>
+  <div class="statband"><div><b>${MEGAS.reduce((a, m) => a + (m._count != null ? m._count : m.products.length), 0).toLocaleString('ro-RO')}</b><span>produse</span></div><div><b>${storeList.length}</b><span>magazine partenere</span></div><div><b>${MEGAS.length}</b><span>categorii</span></div><div><b>Zilnic</b><span>prețuri actualizate</span></div></div>
   ${topDeals.length >= 6 ? `<section>${sechead('Cele mai mari reduceri')}${grid(topDeals)}</section>` : ''}
   ${PROMOS.length ? `<section>${sechead('Promoții & vouchere', '/promotii/')}${promoGrid(shuffled(PROMOS).slice(0, 6))}</section>` : ''}
-  ${MEGAS.map((m) => m.products.length >= 6 ? `<section>${sechead(m.label, `/categorie/${m.slug}/`)}${grid(shuffled(m.products).slice(0, 10))}</section>` : '').join('')}
+  ${MEGAS.map((m) => m.products.length >= 6 ? `<section>${sechead(m.label, catLink(m.slug))}${grid(shuffled(m.products).slice(0, 10))}</section>` : '').join('')}
   <section>${sechead('Categorii')}<div class="catcards">${MEGAS.map(catCard).join('')}</div></section>
-  <section>${sechead('Branduri populare', '/branduri/')}<div class="chips">${gBrands.slice(0, 24).map((b) => `<a class="chip" href="/brand/${b.slug}/">${esc(b.label)}</a>`).join('')}</div></section>
+  ${isHub ? '' : `<section>${sechead('Branduri populare', '/branduri/')}<div class="chips">${gBrands.slice(0, 24).map((b) => `<a class="chip" href="/brand/${b.slug}/">${esc(b.label)}</a>`).join('')}</div></section>`}
   <section>${sechead('Magazine partenere', '/magazine/')}<div class="stores">${storeList.slice(0, 30).map((s) => `<a class="storelogo${s.inv ? ' inv' : ''}" href="/magazin/${s.slug}/" title="${esc(s.label)}">${s.logo ? `<img src="${esc(s.logo)}" alt="${esc(s.label)}" loading="lazy" ${onerr}>` : `<span class="sl-name">${esc(s.label)}</span>`}</a>`).join('')}</div></section>`;
 W('index.html', layout({ title: 'TopBuy.ro — produse și oferte din magazinele din România', desc: 'Descoperă mii de produse și oferte din magazinele tale preferate. Reduceri actualizate zilnic.', canonical: SITE + '/', body: homeBody, jsonld: homeSchema, noSearch: true }));
 addSM('/');
@@ -575,7 +582,7 @@ for (const f of ['logo.png', 'favicon-16.png', 'favicon-32.png', 'favicon-48.png
 }
 W('site.webmanifest', JSON.stringify({ name: SITE_NAME, short_name: 'TopBuy', start_url: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#f7941d', icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }] }));
 // search: client-side index + page (hub only)
-if (!isShard) {
+if (!isShard && !isHub) {
 W('search-index.json', JSON.stringify(ALL.map((p) => ({ t: p.title, u: `/produs/${p.slug}/`, p: p.price, o: p.oldPrice, i: p.img, b: p.brand }))));
 W('cautare/index.html', layout({ title: 'Caută produse | TopBuy.ro', desc: 'Caută printre mii de produse și oferte din magazinele partenere.', canonical: `${SITE}/cautare/`, body: `
   <h1 id="rh">Caută produse</h1>
@@ -597,6 +604,8 @@ addSM('/cautare/');
 const fnDir = join(DIST, '..', 'functions', 'out', '[merchant]'); mkdirSync(fnDir, { recursive: true });
 const STORES = {}; storeList.forEach((s) => { if (s.aff) STORES[s.slug] = { u: s.aff.u, c: s.aff.code }; });
 const PROMOMAP = {}; PROMOS.forEach((p) => { if (p.landing && p.code) PROMOMAP[p.id] = { u: p.landing, c: p.code, e: p.end || '' }; });
+// server (full mode): write maps for the Node /out + /img service (nginx proxies /out,/img → it)
+if (!isShard && !isHub) { mkdirSync(join(DIST, '_data'), { recursive: true }); writeFileSync(join(DIST, '_data', 'campaign.json'), JSON.stringify(CAMPAIGN)); writeFileSync(join(DIST, '_data', 'stores.json'), JSON.stringify(STORES)); writeFileSync(join(DIST, '_data', 'promos.json'), JSON.stringify(PROMOMAP)); }
 writeFileSync(join(fnDir, '[id].js'), `const SITE=${JSON.stringify(SITE)};const AFF_CODE=${JSON.stringify(AFF_CODE)};const CAMPAIGN=${JSON.stringify(CAMPAIGN)};const STORES=${JSON.stringify(STORES)};const PROMOS=${JSON.stringify(PROMOMAP)};
 export function onRequest({params}){const m=params.merchant,id=params.id;
 if(m==='_promo'){const p=PROMOS[id];if(!p||(p.e&&Date.parse(p.e)<Date.now()))return Response.redirect(SITE+'/promotii/',302);return Response.redirect('https://event.2performant.com/events/click?ad_type=quicklink&aff_code='+AFF_CODE+'&unique='+p.c+'&redirect_to='+encodeURIComponent(p.u),302);}
