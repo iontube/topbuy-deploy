@@ -81,13 +81,28 @@ async function ensureProject(acc, name) {
   return false;
 }
 async function attachDomain(acc, name, host) {
-  if ((await cf(acc, `/accounts/${acc.id}/pages/projects/${name}/domains/${host}`)).success) return true;
-  return !!(await cf(acc, `/accounts/${acc.id}/pages/projects/${name}/domains`, 'POST', { name: host })).success;
+  for (let i = 0; i < 5; i++) {
+    if ((await cf(acc, `/accounts/${acc.id}/pages/projects/${name}/domains/${host}`)).success) return true;
+    const c = await cf(acc, `/accounts/${acc.id}/pages/projects/${name}/domains`, 'POST', { name: host });
+    if (c.success) return true;
+    if ((c.errors || []).some((e) => /already|exists/i.test(e.message || ''))) return true;
+    await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+  }
+  return false;
 }
 async function ensureCNAME(sub, target) {
-  const g = await cf(A0, `/zones/${ZONE}/dns_records?name=${sub}.topbuy.ro`);
-  if (g.success && g.result.length) return true;
-  return !!(await cf(A0, `/zones/${ZONE}/dns_records`, 'POST', { type: 'CNAME', name: sub, content: target, proxied: true, ttl: 1 })).success;
+  let lastErr = '';
+  for (let i = 0; i < 6; i++) {
+    const g = await cf(A0, `/zones/${ZONE}/dns_records?name=${sub}.topbuy.ro`);
+    if (g.success && g.result.length) return true;            // already there (any prior run / race)
+    const c = await cf(A0, `/zones/${ZONE}/dns_records`, 'POST', { type: 'CNAME', name: sub, content: target, proxied: true, ttl: 1 });
+    if (c.success) return true;
+    lastErr = JSON.stringify(c.errors || c);
+    if (/81053|81057|already exists/i.test(lastErr)) return true; // record exists → ok
+    await new Promise((r) => setTimeout(r, 1500 * (i + 1)));    // backoff for zone-API rate limit
+  }
+  console.log(`    cname err ${sub}: ${lastErr.slice(0, 120)}`);
+  return false;
 }
 function buildShard(sub) {
   const dir = join(WORK, 'sh', sub);
